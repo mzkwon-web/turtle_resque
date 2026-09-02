@@ -26,8 +26,9 @@
 
         // Firebase Configuration injected by environment
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'turtle_rescue_default';
+        
+        // 💡 GitHub Pages 등 외부 배포 시 실시간 통신을 위해서는 아래 mock-project 대신 본인의 Firebase Config 객체를 넣어야 합니다.
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-            // Mock config for local testing if env is missing
             projectId: "mock-project"
         };
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
@@ -77,6 +78,16 @@
         };
 
         async function initApp() {
+            // 외부 환경에서도 UI 라우팅은 정상 작동하도록 DB 연결 시도 전에 설정합니다.
+            handleRouting();
+            window.addEventListener('hashchange', handleRouting);
+
+            if (firebaseConfig.projectId === "mock-project") {
+                console.warn("외부 환경에 배포되었습니다. 실시간 연동을 위해서는 Firebase 설정이 필요합니다.");
+                showToast("⚠️ 자체 DB 설정이 필요합니다. (UI 체험 모드)");
+                return; // 외부 배포 시 에러로 인한 먹통 방지를 위해 DB 연결 중단
+            }
+
             try {
                 if (initialAuthToken) {
                     await signInWithCustomToken(auth, initialAuthToken);
@@ -84,10 +95,6 @@
                     await signInAnonymously(auth);
                 }
                 currentUser = auth.currentUser;
-                
-                // Routing based on hash
-                handleRouting();
-                window.addEventListener('hashchange', handleRouting);
                 
                 // Listen to Game State
                 onSnapshot(gameStateRef, (docSnap) => {
@@ -152,6 +159,7 @@
         }
 
         async function resetGameState() {
+            if (firebaseConfig.projectId === "mock-project") return;
             const initialQuestions = [];
             for(let i=1; i<=5; i++) {
                 const qText = document.getElementById(`q${i}-text`).value || `거북이는 파충류이다? (${i}번 문제)`;
@@ -164,12 +172,13 @@
                 questions: initialQuestions,
                 startTime: null
             });
-
-            // Clear old players (In a real production app we'd delete documents, but for prototype we update state or ignore)
-            // Note: Cannot delete collections directly from client SDK. We will just filter them or instruct to start a new app id.
         }
 
         ui.btnStartGame.addEventListener('click', async () => {
+            if (firebaseConfig.projectId === "mock-project") {
+                showToast("DB 설정이 없어 게임을 시작할 수 없습니다.");
+                return;
+            }
             if(!globalGameState) return;
             const updatedQuestions = [];
             for(let i=1; i<=5; i++) {
@@ -206,7 +215,6 @@
                 ui.hostDashboard.classList.add('hidden');
             }
 
-            // Calculate Ranks: (1) Finished, (2) Most Correct, (3) Fastest Time
             const sortedPlayers = [...globalPlayers].sort((a, b) => {
                 if (a.isFinished !== b.isFinished) return a.isFinished ? -1 : 1;
                 if (a.correctCount !== b.correctCount) return b.correctCount - a.correctCount;
@@ -260,9 +268,13 @@
             const name = ui.inputPlayerName.value.trim();
             if(!name) return showToast("이름을 입력해주세요!");
             
+            if (firebaseConfig.projectId === "mock-project") {
+                showToast("DB 설정이 없어 서버에 입장할 수 없습니다.");
+                return;
+            }
+
             localPlayerState.name = name;
             
-            // Create or update player document
             const myDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'players', currentUser.uid);
             await setDoc(myDocRef, {
                 name: name,
@@ -278,10 +290,10 @@
         });
 
         function updateAppUIBasedOnState() {
-            if(isHost || !localPlayerState.name) return; // Only process for active players
+            if(isHost || !localPlayerState.name) return;
 
             const myData = globalPlayers.find(p => p.id === currentUser.uid);
-            if(myData) localPlayerState = myData; // Sync local state
+            if(myData) localPlayerState = myData;
 
             ui.playerWaiting.classList.add('hidden');
             ui.playerPlaying.classList.add('hidden');
@@ -343,7 +355,6 @@
         function updatePlayerFinishedState() {
             if(isHost || !localPlayerState.isFinished) return;
 
-            // Sort logic exactly same as Host
             const sortedPlayers = [...globalPlayers].sort((a, b) => {
                 if (a.isFinished !== b.isFinished) return a.isFinished ? -1 : 1;
                 if (a.correctCount !== b.correctCount) return b.correctCount - a.correctCount;
@@ -392,7 +403,7 @@
 
         function showToast(msg) {
             const toast = document.createElement('div');
-            toast.className = 'fixed bottom-5 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-4 py-2 rounded-lg shadow-lg z-50';
+            toast.className = 'fixed bottom-5 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-4 py-2 rounded-lg shadow-lg z-50 whitespace-nowrap';
             toast.innerText = msg;
             document.body.appendChild(toast);
             setTimeout(() => toast.remove(), 2500);
