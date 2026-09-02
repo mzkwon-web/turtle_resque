@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Turtle Rescue - O/X Quiz</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f0fdf4; color: #166534; }
+        .glass-panel { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.5); }
+        .ox-btn { transition: transform 0.1s; }
+        .ox-btn:active { transform: scale(0.95); }
+        #app-container { min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        .hidden { display: none !important; }
+    </style>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase Configuration injected by environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'turtle_rescue_default';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            // Mock config for local testing if env is missing
+            projectId: "mock-project"
+        };
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // Core State
+        let currentUser = null;
+        let isHost = false;
+        let globalPlayers = [];
+        let globalGameState = null;
+
+        // Firebase Paths
+        const gameStateRef = doc(db, 'artifacts', appId, 'public', 'data', 'gameState', 'current');
+        const playersColRef = collection(db, 'artifacts', appId, 'public', 'data', 'players');
+
+        const ui = {
+            roleSelection: document.getElementById('role-selection'),
+            hostView: document.getElementById('host-view'),
+            playerView: document.getElementById('player-view'),
+            
+            // Host Elements
+            qrContainer: document.getElementById('qr-code'),
+            playerCount: document.getElementById('player-count'),
+            btnStartGame: document.getElementById('btn-start-game'),
+            hostSetup: document.getElementById('host-setup'),
+            hostDashboard: document.getElementById('host-dashboard'),
+            leaderboardList: document.getElementById('leaderboard-list'),
+            btnExportCsv: document.getElementById('btn-export-csv'),
+            btnResetGame: document.getElementById('btn-reset-game'),
+            
+            // Player Elements
+            playerLogin: document.getElementById('player-login'),
+            playerWaiting: document.getElementById('player-waiting'),
+            playerPlaying: document.getElementById('player-playing'),
+            playerFinished: document.getElementById('player-finished'),
+            inputPlayerName: document.getElementById('input-player-name'),
+            btnJoinGame: document.getElementById('btn-join-game'),
+            questionText: document.getElementById('question-text'),
+            questionProgress: document.getElementById('question-progress'),
+            btnO: document.getElementById('btn-o'),
+            btnX: document.getElementById('btn-x'),
+            rankResultText: document.getElementById('rank-result-text'),
+            rankSubText: document.getElementById('rank-sub-text')
+        };
+
+        async function initApp() {
+            try {
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+                currentUser = auth.currentUser;
+                
+                // Routing based on hash
+                handleRouting();
+                window.addEventListener('hashchange', handleRouting);
+                
+                // Listen to Game State
+                onSnapshot(gameStateRef, (docSnap) => {
+                    if(docSnap.exists()) {
+                        globalGameState = docSnap.data();
+                        updateAppUIBasedOnState();
+                    } else {
+                        // Initialize default game state if it doesn't exist
+                        if(isHost) resetGameState();
+                    }
+                }, (error) => console.error("Game State listen error:", error));
+
+                // Listen to Players Collection
+                onSnapshot(playersColRef, (snapshot) => {
+                    globalPlayers = [];
+                    snapshot.forEach(doc => globalPlayers.push({id: doc.id, ...doc.data()}));
+                    
+                    if (isHost) updateHostDashboard();
+                    else updatePlayerFinishedState();
+                }, (error) => console.error("Players listen error:", error));
+
+            } catch (err) {
+                console.error("Auth Error:", err);
+                showToast("시스템 연결에 실패했습니다.");
+            }
+        }
+
+        function handleRouting() {
+            const hash = window.location.hash;
+            ui.roleSelection.classList.add('hidden');
+            ui.hostView.classList.add('hidden');
+            ui.playerView.classList.add('hidden');
+
+            if (hash === '#host') {
+                isHost = true;
+                ui.hostView.classList.remove('hidden');
+                initHostView();
+            } else if (hash === '#player') {
+                isHost = false;
+                ui.playerView.classList.remove('hidden');
+                initPlayerView();
+            } else {
+                ui.roleSelection.classList.remove('hidden');
+            }
+        }
+
+        document.getElementById('btn-role-host').addEventListener('click', () => window.location.hash = 'host');
+        document.getElementById('btn-role-player').addEventListener('click', () => window.location.hash = 'player');
+
+        function initHostView() {
+            ui.qrContainer.innerHTML = '';
+            const playerUrl = window.location.href.split('#')[0] + '#player';
+            new QRCode(ui.qrContainer, {
+                text: playerUrl,
+                width: 150,
+                height: 150,
+                colorDark : "#166534",
+                colorLight : "#ffffff",
+                correctLevel : QRCode.CorrectLevel.L
+            });
+            document.getElementById('share-link').innerText = playerUrl;
+        }
+
+        async function resetGameState() {
+            const initialQuestions = [];
+            for(let i=1; i<=5; i++) {
+                const qText = document.getElementById(`q${i}-text`).value || `거북이는 파충류이다? (${i}번 문제)`;
+                const qAns = document.getElementById(`q${i}-ans`).value;
+                initialQuestions.push({ q: qText, a: qAns });
+            }
+            
+            await setDoc(gameStateRef, {
+                status: 'waiting',
+                questions: initialQuestions,
+                startTime: null
+            });
+
+            // Clear old players (In a real production app we'd delete documents, but for prototype we update state or ignore)
+            // Note: Cannot delete collections directly from client SDK. We will just filter them or instruct to start a new app id.
+        }
+
+        ui.btnStartGame.addEventListener('click', async () => {
+            if(!globalGameState) return;
+            const updatedQuestions = [];
+            for(let i=1; i<=5; i++) {
+                updatedQuestions.push({
+                    q: document.getElementById(`q${i}-text`).value,
+                    a: document.getElementById(`q${i}-ans`).value
+                });
+            }
+
+            await updateDoc(gameStateRef, {
+                status: 'playing',
+                questions: updatedQuestions,
+                startTime: Date.now()
+            });
+            showToast("게임을 시작합니다!");
+        });
+
+        ui.btnResetGame.addEventListener('click', async () => {
+            if(confirm("게임을 대기 상태로 초기화하시겠습니까? (참여자 데이터는 유지됩니다)")) {
+                await resetGameState();
+                ui.hostSetup.classList.remove('hidden');
+                ui.hostDashboard.classList.add('hidden');
+            }
+        });
+
+        function updateHostDashboard() {
+            ui.playerCount.innerText = globalPlayers.length;
+            
+            if (globalGameState?.status === 'playing' || globalGameState?.status === 'finished') {
+                ui.hostSetup.classList.add('hidden');
+                ui.hostDashboard.classList.remove('hidden');
+            } else {
+                ui.hostSetup.classList.remove('hidden');
+                ui.hostDashboard.classList.add('hidden');
+            }
+
+            // Calculate Ranks: (1) Finished, (2) Most Correct, (3) Fastest Time
+            const sortedPlayers = [...globalPlayers].sort((a, b) => {
+                if (a.isFinished !== b.isFinished) return a.isFinished ? -1 : 1;
+                if (a.correctCount !== b.correctCount) return b.correctCount - a.correctCount;
+                if (a.finishTime && b.finishTime) return a.finishTime - b.finishTime;
+                return 0;
+            });
+
+            ui.leaderboardList.innerHTML = '';
+            sortedPlayers.forEach((p, index) => {
+                const li = document.createElement('li');
+                li.className = `p-3 rounded-lg flex justify-between items-center ${index === 0 && p.isFinished ? 'bg-yellow-100 font-bold border-2 border-yellow-400' : 'bg-gray-50 border'}`;
+                
+                let statusBadge = p.isFinished ? 
+                    `<span class="text-green-600 text-sm"><i class="fas fa-check-circle"></i> 완료 (${p.correctCount}/5)</span>` : 
+                    `<span class="text-gray-500 text-sm">진행중 (${p.progress}/5)</span>`;
+
+                li.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <span class="w-6 text-center text-gray-500">${index + 1}</span>
+                        <span class="text-lg">${escapeHtml(p.name)}</span>
+                    </div>
+                    <div>${statusBadge}</div>
+                `;
+                ui.leaderboardList.appendChild(li);
+            });
+        }
+
+        ui.btnExportCsv.addEventListener('click', () => {
+            if(globalPlayers.length === 0) return showToast("데이터가 없습니다.");
+            
+            let csvContent = "data:text/csv;charset=utf-8,\uFEFF";
+            csvContent += "이름,진행도,정답수,완료여부,기록(ms)\n";
+            
+            globalPlayers.forEach(p => {
+                const row = `${p.name},${p.progress},${p.correctCount},${p.isFinished ? '완료' : '미완료'},${p.finishTime || 'N/A'}`;
+                csvContent += row + "\n";
+            });
+
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", "turtle_rescue_results.csv");
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        });
+
+        let localPlayerState = { name: '', progress: 0, correctCount: 0, isFinished: false };
+
+        ui.btnJoinGame.addEventListener('click', async () => {
+            const name = ui.inputPlayerName.value.trim();
+            if(!name) return showToast("이름을 입력해주세요!");
+            
+            localPlayerState.name = name;
+            
+            // Create or update player document
+            const myDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'players', currentUser.uid);
+            await setDoc(myDocRef, {
+                name: name,
+                progress: 0,
+                correctCount: 0,
+                isFinished: false,
+                finishTime: null,
+                joinedAt: Date.now()
+            });
+
+            ui.playerLogin.classList.add('hidden');
+            updateAppUIBasedOnState();
+        });
+
+        function updateAppUIBasedOnState() {
+            if(isHost || !localPlayerState.name) return; // Only process for active players
+
+            const myData = globalPlayers.find(p => p.id === currentUser.uid);
+            if(myData) localPlayerState = myData; // Sync local state
+
+            ui.playerWaiting.classList.add('hidden');
+            ui.playerPlaying.classList.add('hidden');
+            ui.playerFinished.classList.add('hidden');
+
+            if(globalGameState?.status === 'waiting') {
+                ui.playerWaiting.classList.remove('hidden');
+            } 
+            else if (globalGameState?.status === 'playing') {
+                if(localPlayerState.isFinished) {
+                    ui.playerFinished.classList.remove('hidden');
+                } else {
+                    ui.playerPlaying.classList.remove('hidden');
+                    renderCurrentQuestion();
+                }
+            }
+        }
+
+        function renderCurrentQuestion() {
+            if(!globalGameState || !globalGameState.questions) return;
+            const qIndex = localPlayerState.progress;
+            
+            if(qIndex >= 5) {
+                finishGame();
+                return;
+            }
+
+            ui.questionProgress.innerText = `문제 ${qIndex + 1} / 5`;
+            ui.questionText.innerText = globalGameState.questions[qIndex].q;
+        }
+
+        async function handleAnswer(answerStr) {
+            const qIndex = localPlayerState.progress;
+            const isCorrect = globalGameState.questions[qIndex].a === answerStr;
+            
+            let newCorrectCount = localPlayerState.correctCount + (isCorrect ? 1 : 0);
+            let newProgress = localPlayerState.progress + 1;
+            
+            const myDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'players', currentUser.uid);
+            
+            if(newProgress >= 5) {
+                await updateDoc(myDocRef, {
+                    progress: newProgress,
+                    correctCount: newCorrectCount,
+                    isFinished: true,
+                    finishTime: Date.now()
+                });
+            } else {
+                await updateDoc(myDocRef, {
+                    progress: newProgress,
+                    correctCount: newCorrectCount
+                });
+            }
+        }
+
+        ui.btnO.addEventListener('click', () => handleAnswer('O'));
+        ui.btnX.addEventListener('click', () => handleAnswer('X'));
+
+        function updatePlayerFinishedState() {
+            if(isHost || !localPlayerState.isFinished) return;
+
+            // Sort logic exactly same as Host
+            const sortedPlayers = [...globalPlayers].sort((a, b) => {
+                if (a.isFinished !== b.isFinished) return a.isFinished ? -1 : 1;
+                if (a.correctCount !== b.correctCount) return b.correctCount - a.correctCount;
+                if (a.finishTime && b.finishTime) return a.finishTime - b.finishTime;
+                return 0;
+            });
+
+            const myRankIndex = sortedPlayers.findIndex(p => p.id === currentUser.uid);
+            const myRank = myRankIndex + 1;
+
+            if (myRank === 1) {
+                ui.rankResultText.innerHTML = `<span class="text-yellow-500 font-extrabold text-5xl">1등!</span>`;
+                ui.rankSubText.innerText = `축하합니다! ${localPlayerState.correctCount}문제를 가장 빨리 맞혔습니다.`;
+                triggerConfetti();
+            } else {
+                ui.rankResultText.innerHTML = `<span class="text-gray-700 font-bold text-4xl">${myRank}등</span>`;
+                ui.rankSubText.innerText = `수고하셨습니다. 정답 수: ${localPlayerState.correctCount}/5`;
+            }
+        }
+
+        function triggerConfetti() {
+            const duration = 3 * 1000;
+            const end = Date.now() + duration;
+
+            (function frame() {
+                confetti({
+                    particleCount: 5,
+                    angle: 60,
+                    spread: 55,
+                    origin: { x: 0 },
+                    colors: ['#22c55e', '#eab308', '#3b82f6']
+                });
+                confetti({
+                    particleCount: 5,
+                    angle: 120,
+                    spread: 55,
+                    origin: { x: 1 },
+                    colors: ['#22c55e', '#eab308', '#3b82f6']
+                });
+
+                if (Date.now() < end) {
+                    requestAnimationFrame(frame);
+                }
+            }());
+        }
+
+        function showToast(msg) {
+            const toast = document.createElement('div');
+            toast.className = 'fixed bottom-5 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-4 py-2 rounded-lg shadow-lg z-50';
+            toast.innerText = msg;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 2500);
+        }
+
+        function escapeHtml(unsafe) {
+            return (unsafe || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+        }
+
+        // Initialize!
+        window.addEventListener('DOMContentLoaded', initApp);
+
+    </script>
+</head>
+<body class="bg-green-50 selection:bg-green-200">
+
+    <div id="app-container" class="w-full max-w-4xl mx-auto">
+        <!-- Header -->
+        <header class="w-full text-center py-6 mb-4">
+            <h1 class="text-4xl font-extrabold text-green-700 tracking-tight"><i class="fa-solid fa-turtle"></i> Turtle Rescue</h1>
+            <p class="text-green-600 mt-2 font-medium">실시간 O/X 퀴즈 게임</p>
+        </header>
+
+        <div id="role-selection" class="w-full max-w-md glass-panel p-8 rounded-2xl shadow-xl text-center">
+            <h2 class="text-2xl font-bold mb-6 text-gray-800">역할을 선택하세요</h2>
+            <div class="flex flex-col gap-4">
+                <button id="btn-role-host" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-4 rounded-xl text-lg shadow-md transition-colors">
+                    <i class="fa-solid fa-chalkboard-user mr-2"></i> 운영자 화면
+                </button>
+                <button id="btn-role-player" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 rounded-xl text-lg shadow-md transition-colors">
+                    <i class="fa-solid fa-gamepad mr-2"></i> 참여자 화면
+                </button>
+            </div>
+        </div>
+
+        <div id="host-view" class="w-full hidden">
+            <!-- Host Setup Phase -->
+            <div id="host-setup" class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div class="glass-panel p-6 rounded-2xl shadow-lg">
+                    <h3 class="text-xl font-bold mb-4 text-gray-800"><i class="fa-solid fa-list-check"></i> 문제 세팅 (5문항)</h3>
+                    <div class="space-y-4">
+                        <!-- Q1 -->
+                        <div class="flex gap-2">
+                            <input type="text" id="q1-text" value="바다거북은 숨을 쉬기 위해 수면 위로 올라와야 한다." class="flex-1 border p-2 rounded-lg" placeholder="1번 문제">
+                            <select id="q1-ans" class="border p-2 rounded-lg font-bold"><option value="O">O</option><option value="X">X</option></select>
+                        </div>
+                        <!-- Q2 -->
+                        <div class="flex gap-2">
+                            <input type="text" id="q2-text" value="거북이의 등딱지는 뼈와 연결되어 있지 않아 벗을 수 있다." class="flex-1 border p-2 rounded-lg" placeholder="2번 문제">
+                            <select id="q2-ans" class="border p-2 rounded-lg font-bold"><option value="X">X</option><option value="O">O</option></select>
+                        </div>
+                        <!-- Q3 -->
+                        <div class="flex gap-2">
+                            <input type="text" id="q3-text" value="플라스틱 빨대는 바다거북의 코에 박혀 생명을 위협할 수 있다." class="flex-1 border p-2 rounded-lg" placeholder="3번 문제">
+                            <select id="q3-ans" class="border p-2 rounded-lg font-bold"><option value="O">O</option><option value="X">X</option></select>
+                        </div>
+                        <!-- Q4 -->
+                        <div class="flex gap-2">
+                            <input type="text" id="q4-text" value="모든 거북이는 바다에서만 산다." class="flex-1 border p-2 rounded-lg" placeholder="4번 문제">
+                            <select id="q4-ans" class="border p-2 rounded-lg font-bold"><option value="X">X</option><option value="O">O</option></select>
+                        </div>
+                        <!-- Q5 -->
+                        <div class="flex gap-2">
+                            <input type="text" id="q5-text" value="바다거북은 해파리를 먹이로 착각하여 비닐봉지를 먹고 죽기도 한다." class="flex-1 border p-2 rounded-lg" placeholder="5번 문제">
+                            <select id="q5-ans" class="border p-2 rounded-lg font-bold"><option value="O">O</option><option value="X">X</option></select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="glass-panel p-6 rounded-2xl shadow-lg flex flex-col items-center justify-center text-center">
+                    <h3 class="text-xl font-bold mb-2 text-gray-800">참여자 초대</h3>
+                    <div id="qr-code" class="bg-white p-4 rounded-xl shadow-inner mb-4 inline-block"></div>
+                    <p class="text-sm text-gray-500 mb-4 word-break break-all" id="share-link"></p>
+                    <div class="bg-green-100 text-green-800 px-6 py-3 rounded-full font-bold text-lg mb-6">
+                        접속한 참여자: <span id="player-count" class="text-2xl">0</span>명
+                    </div>
+                    <button id="btn-start-game" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-4 rounded-xl text-xl shadow-lg transition-colors">
+                        전체 게임 시작
+                    </button>
+                </div>
+            </div>
+
+            <!-- Host Dashboard Phase -->
+            <div id="host-dashboard" class="hidden glass-panel p-6 rounded-2xl shadow-lg max-w-3xl mx-auto">
+                <div class="flex justify-between items-center mb-6">
+                    <h3 class="text-2xl font-bold text-gray-800"><i class="fa-solid fa-ranking-star text-yellow-500"></i> 실시간 순위 현황</h3>
+                    <div class="flex gap-2">
+                        <button id="btn-reset-game" class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg font-bold text-sm">대기방으로</button>
+                        <button id="btn-export-csv" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-bold text-sm"><i class="fa-solid fa-file-csv"></i> CSV 결과 다운</button>
+                    </div>
+                </div>
+                <div class="bg-white rounded-xl shadow-inner p-4 min-h-[300px] max-h-[500px] overflow-y-auto">
+                    <ul id="leaderboard-list" class="space-y-2">
+                        <!-- Ranks injected here -->
+                    </ul>
+                </div>
+                <p class="text-xs text-gray-400 mt-4 text-center">* 순위 산정: 5문제 완료 우선 > 정답 수 많음 > 최종 제출 빠름 기준</p>
+            </div>
+        </div>
+
+        <div id="player-view" class="w-full max-w-md hidden">
+            <!-- Player Login -->
+            <div id="player-login" class="glass-panel p-8 rounded-2xl shadow-xl text-center">
+                <h2 class="text-2xl font-bold mb-6 text-gray-800">이름을 입력하세요</h2>
+                <input type="text" id="input-player-name" class="w-full border-2 border-gray-300 p-4 rounded-xl text-center text-xl font-bold mb-6 focus:border-green-500 focus:outline-none" placeholder="홍길동">
+                <button id="btn-join-game" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 rounded-xl text-lg shadow-md transition-colors">
+                    입장하기
+                </button>
+            </div>
+
+            <!-- Player Waiting -->
+            <div id="player-waiting" class="hidden glass-panel p-10 rounded-2xl shadow-xl text-center flex flex-col items-center justify-center min-h-[300px]">
+                <div class="animate-spin rounded-full h-16 w-16 border-b-4 border-green-600 mb-6"></div>
+                <h2 class="text-2xl font-bold text-gray-800">운영자를 기다리는 중입니다...</h2>
+                <p class="text-gray-500 mt-2">화면을 끄지 말고 대기해주세요.</p>
+            </div>
+
+            <!-- Player Playing -->
+            <div id="player-playing" class="hidden flex flex-col items-center w-full">
+                <div class="bg-green-600 text-white px-4 py-1 rounded-full text-sm font-bold mb-4 shadow-sm" id="question-progress">문제 1 / 5</div>
+                
+                <div class="glass-panel w-full p-8 rounded-3xl shadow-xl text-center mb-8 min-h-[200px] flex items-center justify-center">
+                    <h2 id="question-text" class="text-2xl md:text-3xl font-extrabold text-gray-800 leading-tight word-break break-keep">
+                        문제가 여기에 표시됩니다.
+                    </h2>
+                </div>
+
+                <div class="flex gap-4 w-full">
+                    <button id="btn-o" class="ox-btn flex-1 bg-blue-500 hover:bg-blue-600 text-white rounded-3xl shadow-lg flex items-center justify-center h-40 text-7xl font-bold">O</button>
+                    <button id="btn-x" class="ox-btn flex-1 bg-red-500 hover:bg-red-600 text-white rounded-3xl shadow-lg flex items-center justify-center h-40 text-7xl font-bold">X</button>
+                </div>
+            </div>
+
+            <!-- Player Finished -->
+            <div id="player-finished" class="hidden glass-panel p-10 rounded-2xl shadow-xl text-center">
+                <div class="text-6xl mb-6"><i class="fa-solid fa-flag-checkered text-gray-800"></i></div>
+                <h2 class="text-2xl font-bold text-gray-800 mb-4">모든 문제를 풀었습니다!</h2>
+                <div id="rank-result-text" class="mb-2">
+                    <span class="text-gray-400 text-lg">결과 집계 중...</span>
+                </div>
+                <p id="rank-sub-text" class="text-gray-600 font-medium"></p>
+                <p class="text-sm text-gray-400 mt-8">다른 사람들의 풀이가 끝날 때까지 순위가 변동될 수 있습니다.</p>
+            </div>
+        </div>
+
+    </div>
+</body>
+</html>
