@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>가속도 센서로 캐릭터 움직이기</title>
+<style>
+  :root{
+    --bg:#f7fbff;
+    --ink:#16324a;
+    --muted:#5a6d7d;
+    --card:#ffffff;
+    --line:#dbe8f2;
+    --accent:#2d7ff9;
+    --accent2:#7b61ff;
+    --good:#18a66a;
+    --warn:#ffb020;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:linear-gradient(180deg,#f8fcff 0%,#eef7ff 100%);
+    color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR","Segoe UI",sans-serif;
+  }
+  .wrap{max-width:1200px;margin:0 auto;padding:28px 18px 36px}
+  .hero{text-align:center;margin-bottom:18px}
+  h1{font-size:clamp(28px,4vw,52px);margin:0 0 8px;letter-spacing:-.04em}
+  .lead{font-size:clamp(15px,2vw,21px);color:var(--muted);margin:0}
+  .grid{display:grid;grid-template-columns:1fr 110px 1fr;gap:18px;align-items:stretch}
+  .card{
+    background:rgba(255,255,255,.96); border:1px solid var(--line); border-radius:24px;
+    padding:22px; box-shadow:0 12px 30px rgba(48,94,132,.09);
+  }
+  .tag{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;background:#eef5ff;font-weight:800;font-size:14px}
+  .stage-title{font-size:24px;font-weight:900;margin:14px 0 8px}
+  .stage-sub{color:var(--muted);margin:0 0 18px;line-height:1.55}
+  .micro-stage,.screen-stage{height:300px;border-radius:20px;background:#f7fbff;border:1px dashed #bfd3e4;display:grid;place-items:center;position:relative;overflow:hidden}
+  .micro{
+    width:170px;height:140px;border-radius:18px;background:#1f2937;position:relative;
+    box-shadow:0 16px 30px rgba(15,23,42,.22);transition:transform .45s ease;
+  }
+  .leds{position:absolute;left:46px;top:26px;width:78px;height:78px;display:grid;grid-template-columns:repeat(5,1fr);gap:5px}
+  .dot{width:10px;height:10px;border-radius:2px;background:#ff4f6d;opacity:.92}
+  .button{position:absolute;width:18px;height:18px;border-radius:50%;background:#d7dde7;top:52px}
+  .button.a{left:18px}.button.b{right:18px}
+  .axis-x,.axis-y{
+    position:absolute;font-weight:900;font-size:14px;background:white;border:1px solid var(--line);
+    padding:6px 9px;border-radius:999px;box-shadow:0 4px 12px rgba(0,0,0,.05)
+  }
+  .axis-x{bottom:12px;left:50%;transform:translateX(-50%)}
+  .axis-y{right:10px;top:50%;transform:translateY(-50%)}
+  .value{position:absolute;left:12px;bottom:12px;font-size:14px;font-weight:800;color:var(--accent)}
+  .arrow-col{display:grid;place-items:center}
+  .flow{
+    width:86px;height:86px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));
+    color:white;display:grid;place-items:center;font-weight:900;text-align:center;line-height:1.15;
+    box-shadow:0 10px 24px rgba(60,99,210,.24)
+  }
+  .screen{
+    position:absolute;inset:22px;border-radius:16px;background:linear-gradient(#bfe7ff 0 62%,#8bd58d 62%);
+    border:5px solid #26374a;overflow:hidden;
+  }
+  .cloud{position:absolute;top:18px;left:24px;font-size:42px;opacity:.9}
+  .turtle{
+    position:absolute;bottom:28px;left:50%;transform:translateX(-50%);font-size:66px;
+    transition:left .45s ease, transform .45s ease;
+    filter:drop-shadow(0 5px 4px rgba(0,0,0,.14))
+  }
+  .status{
+    position:absolute;top:12px;right:12px;background:rgba(255,255,255,.9);border-radius:12px;padding:8px 10px;
+    font-size:13px;font-weight:800
+  }
+  .controls{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin:18px 0 0}
+  button{
+    appearance:none;border:0;border-radius:14px;padding:11px 15px;font-size:15px;font-weight:900;
+    background:#eaf2ff;color:#184b8e;cursor:pointer
+  }
+  button:hover{transform:translateY(-1px)}
+  .concepts{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:18px}
+  .concept{background:white;border:1px solid var(--line);border-radius:18px;padding:16px;text-align:center}
+  .concept b{display:block;margin-top:8px;font-size:17px}
+  .concept span{font-size:13px;color:var(--muted)}
+  .message{
+    margin-top:18px;border-radius:20px;padding:18px 20px;background:#173f6b;color:white;text-align:center;
+    font-size:clamp(17px,2.2vw,24px);font-weight:900;letter-spacing:-.02em
+  }
+  .teacher{
+    margin-top:14px;background:#fff8e8;border:1px solid #ffe0a3;border-radius:16px;padding:14px 16px;
+    color:#694a00;font-size:14px;line-height:1.55
+  }
+  .sign{font-weight:900;color:#173f6b}
+  @media(max-width:820px){
+    .grid{grid-template-columns:1fr}
+    .arrow-col{min-height:72px}
+    .flow{width:72px;height:72px}
+    .concepts{grid-template-columns:repeat(2,1fr)}
+  }
+  @media(max-width:480px){
+    .wrap{padding:18px 12px 24px}
+    .card{padding:16px}
+    .micro-stage,.screen-stage{height:260px}
+    .concepts{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <section class="hero">
+    <h1>내가 기울이면, 화면 속 캐릭터도 움직여요!</h1>
+    <p class="lead">가속도 센서의 X·Y축으로 배우는 하드웨어 ↔ 소프트웨어 인터랙션</p>
+  </section>
+
+  <section class="grid">
+    <article class="card">
+      <span class="tag">HW · 하드웨어</span>
+      <div class="stage-title">micro:bit를 기울여요</div>
+      <p class="stage-sub">가속도 센서가 <b>X축(좌·우)</b>, <b>Y축(앞·뒤)</b> 움직임을 감지해요.</p>
+      <div class="micro-stage">
+        <div class="micro" id="micro">
+          <div class="leds">
+            <i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i>
+            <i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i>
+            <i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i>
+            <i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i>
+            <i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i>
+          </div>
+          <span class="button a"></span><span class="button b"></span>
+        </div>
+        <div class="axis-x">X축 ↔ 좌 · 우</div>
+        <div class="axis-y">Y축 ↕ 앞 · 뒤</div>
+        <div class="value" id="sensorValue">X ≈ 0 · Y ≈ 0</div>
+      </div>
+      <div class="controls">
+        <button data-move="left">← 왼쪽</button>
+        <button data-move="center">가운데</button>
+        <button data-move="right">오른쪽 →</button>
+        <button data-move="forward">앞으로</button>
+        <button data-move="back">뒤로</button>
+      </div>
+    </article>
+
+    <div class="arrow-col">
+      <div class="flow">센서값<br>전달</div>
+    </div>
+
+    <article class="card">
+      <span class="tag">SW · 소프트웨어</span>
+      <div class="stage-title">엔트리가 값을 받아 움직여요</div>
+      <p class="stage-sub">프로그램이 센서 값을 읽고, 조건에 따라 캐릭터의 위치를 바꿔요.</p>
+      <div class="screen-stage">
+        <div class="screen">
+          <div class="cloud">☁️</div>
+          <div class="status" id="status">대기 중</div>
+          <div class="turtle" id="turtle">🐢</div>
+        </div>
+      </div>
+    </article>
+  </section>
+
+  <section class="concepts">
+    <div class="concept">① 🖐️<b>기울이기</b><span>사람이 micro:bit를 움직여요</span></div>
+    <div class="concept">② 🧭<b>감지하기</b><span>가속도 센서가 X·Y값을 읽어요</span></div>
+    <div class="concept">③ 💻<b>처리하기</b><span>엔트리가 값을 판단해요</span></div>
+    <div class="concept">④ 🐢<b>움직이기</b><span>화면 속 캐릭터가 반응해요</span></div>
+  </section>
+
+  <div class="message">
+    하드웨어의 움직임이 센서 데이터가 되고,<br>
+    소프트웨어는 그 데이터를 받아 화면의 움직임으로 바꿉니다.
+  </div>
+
+  <div class="teacher">
+    <b>선생님 확인용:</b> 이 페이지는 수업 개념을 보여주기 위해 기본적으로
+    <span class="sign">왼쪽 → X(-), 오른쪽 → X(+)</span>로 표현합니다.
+    micro:bit의 공식 자료는 <b>X축=좌·우, Y축=앞·뒤</b>임을 확인해 줍니다.
+    다만 실제 부호는 엔트리에서 연결한 micro:bit의 자세·API 표현을 한 번 실측한 뒤 최종 확정하는 것을 권장합니다.
+  </div>
+</div>
+
+<script>
+const micro = document.getElementById('micro');
+const turtle = document.getElementById('turtle');
+const sensorValue = document.getElementById('sensorValue');
+const status = document.getElementById('status');
+
+function move(kind){
+  if(kind==='left'){
+    micro.style.transform='rotate(-18deg)';
+    turtle.style.left='24%';
+    sensorValue.textContent='X = 음수(-) · Y ≈ 0';
+    status.textContent='X축 왼쪽 이동';
+  }else if(kind==='right'){
+    micro.style.transform='rotate(18deg)';
+    turtle.style.left='76%';
+    sensorValue.textContent='X = 양수(+) · Y ≈ 0';
+    status.textContent='X축 오른쪽 이동';
+  }else if(kind==='forward'){
+    micro.style.transform='perspective(400px) rotateX(20deg)';
+    turtle.style.transform='translateX(-50%) scale(1.10)';
+    sensorValue.textContent='X ≈ 0 · Y축 값 변화';
+    status.textContent='Y축 앞·뒤 입력';
+  }else if(kind==='back'){
+    micro.style.transform='perspective(400px) rotateX(-20deg)';
+    turtle.style.transform='translateX(-50%) scale(.88)';
+    sensorValue.textContent='X ≈ 0 · Y축 값 변화';
+    status.textContent='Y축 앞·뒤 입력';
+  }else{
+    micro.style.transform='none';
+    turtle.style.left='50%';
+    turtle.style.transform='translateX(-50%)';
+    sensorValue.textContent='X ≈ 0 · Y ≈ 0';
+    status.textContent='대기 중';
+  }
+}
+document.querySelectorAll('button[data-move]').forEach(btn=>{
+  btn.addEventListener('click',()=>move(btn.dataset.move));
+});
+
+const seq=['center','left','center','right','center'];
+let i=0;
+setInterval(()=>{ move(seq[i%seq.length]); i++; },1400);
+</script>
+</body>
+</html>
